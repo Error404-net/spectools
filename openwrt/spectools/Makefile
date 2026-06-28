@@ -1,0 +1,66 @@
+#
+# spectools — Wi-Spy USB spectrum analyzer tools
+# OpenWrt package definition
+#
+# To use as a local feed during development:
+#   echo "src-link spectools /path/to/spectools/openwrt" >> feeds.conf
+#   scripts/feeds update spectools && scripts/feeds install spectools
+#
+# To publish officially: tag a release on GitHub, update PKG_SOURCE_URL
+# to the tarball URL, set PKG_HASH to the SHA-256, and submit a PR to
+# openwrt/packages in utils/spectools/.
+#
+
+include $(TOPDIR)/rules.mk
+
+PKG_NAME:=spectools
+PKG_VERSION:=1.0.1
+PKG_RELEASE:=1
+
+# ponytail: using git source; swap to versioned tarball + PKG_HASH for official submission
+PKG_SOURCE_PROTO:=git
+PKG_SOURCE_URL:=https://github.com/Error404-net/spectools.git
+PKG_SOURCE_VERSION:=master
+PKG_MIRROR_HASH:=skip
+
+PKG_MAINTAINER:=Jesse <jesse@error404.net>
+PKG_LICENSE:=GPL-2.0-only
+PKG_LICENSE_FILES:=GPL
+
+PKG_FIXUP:=autoreconf
+PKG_INSTALL:=1
+PKG_BUILD_PARALLEL:=1
+
+include $(INCLUDE_DIR)/package.mk
+
+define Package/spectools
+  SECTION:=utils
+  CATEGORY:=Utilities
+  TITLE:=Wi-Spy USB spectrum analyzer tools
+  DEPENDS:=+libusb-1.0
+  URL:=https://github.com/Error404-net/spectools
+endef
+
+define Package/spectools/description
+  Userspace drivers and CLI utilities for MetaGeek Wi-Spy USB spectrum
+  analyzers (DBx, 2.4x, Gen1) and the Ubertooth U1. Provides:
+    spectool_raw  — raw sweep data to stdout (JSONL via bridge)
+    spectool_net  — TCP server for remote device sharing
+  Ported to libusb-1.0 for OpenWrt / musl compatibility.
+endef
+
+CONFIGURE_ARGS += \
+	--disable-gtk \
+	--disable-curses \
+	--disable-fb
+
+define Package/spectools/install
+	$(INSTALL_DIR) $(1)/usr/bin
+	$(INSTALL_BIN) $(PKG_INSTALL_DIR)/usr/bin/spectool_raw $(1)/usr/bin/
+	$(INSTALL_BIN) $(PKG_INSTALL_DIR)/usr/bin/spectool_net $(1)/usr/bin/
+endef
+
+define Package/spectools/conffiles
+endef
+
+$(eval $(call BuildPackage,spectools))
