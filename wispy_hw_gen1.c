@@ -34,34 +34,12 @@
 #include <sys/socket.h>
 #include <sys/wait.h>
 #include <pthread.h>
+#include <stdlib.h>
 #include <string.h>
-
-#ifdef SYS_LINUX
-/* Needed for our own tools */
 #include <unistd.h>
-#include <sys/stat.h>
-#include <sys/ioctl.h>
 
-/* Kluge around kernel internal/external header breakage */
-#ifndef __user
-#define __user
-#endif
-
-#include <linux/usbdevice_fs.h>
-#include <errno.h>
-/* 
- * Miserable hack to fix some distros which bundle a modern kernel but didn't
- * update their linux/usbdevice_fs.h files.  We define the ioctl locally, in
- * theory the worst that could happen is that the kernel rejects it anyhow.
- */
-#ifndef USBDEVFS_DISCONNECT
-#warning "Kernel headers dont define USB disconnect support, trying to fake it"
-#define USBDEVFS_DISCONNECT        _IO('U', 22)
-#endif
-#endif /* linux hack */
-
-/* LibUSB stuff */
-#include <usb.h>
+/* LibUSB 1.0 */
+#include <libusb.h>
 
 /* USB HID functions from specs which aren't defined for us */
 #define HID_GET_REPORT 0x01
@@ -88,12 +66,13 @@
 
 #include "spectool_container.h"
 #include "wispy_hw_gen1.h"
-#include "wispy_hw_24x.h"
+
+static libusb_context *g_usb_ctx = NULL;
 
 /* Aux tracking struct for wispy1 characteristics */
 typedef struct _wispy1_usb_aux {
-	struct usb_device *dev;
-	struct usb_dev_handle *devhdl;
+	libusb_device *dev;
+	libusb_device_handle *devhdl;
 
 	time_t last_read;
 
@@ -125,51 +104,6 @@ typedef struct _wispy1_usb_aux {
 	spectool_phy *phydev;
 } wispy1_usb_aux;
 
-#ifdef SYS_LINUX
-/* Libusb doesn't seem to always provide this, so we'll use our own, taken from the 
-* usb_detatch_kernel_driver_np...
-*
-* THIS IS A HORRIBLE EVIL HACK THAT SHOULDN'T BE DONE, EVER
-* 
-*/
-struct local_usb_ioctl {
-	int ifno;
-	int ioctl_code;
-	void *data;
-};
-
-struct ghetto_libusb_devhandle {
-	int fd;
-	/* Nooo... so bad. */
-};
-
-int wispy_usb_detach_hack(struct usb_dev_handle *dev, int interface, char *errstr) {
-	struct local_usb_ioctl command;
-	struct ghetto_libusb_devhandle *gdev;
-
-	command.ifno = interface;
-	command.ioctl_code = USBDEVFS_DISCONNECT;
-	command.data = NULL;
-
-	gdev = (struct ghetto_libusb_devhandle *) dev;
-
-	if (ioctl(gdev->fd, USBDEVFS_IOCTL, &command) < 0) {
-		if (errno == EINVAL) {
-			snprintf(errstr, SPECTOOL_ERROR_MAX, "Your kernel doesn't appear to accept "
-					 "the USB disconnect command.  Either your kernel is too old and "
-					 "does not support device removal, or support for removal has "
-					 "been changed by your distribution kernel maintainers.");
-		} 
-
-		snprintf(errstr, SPECTOOL_ERROR_MAX, "Could not detatch kernel driver from "
-				 "interface %d: %s", interface, strerror(errno));
-		return -1;
-	}
-
-	return 0;
-}
-#endif /* sys_linux */
-
 /* Prototypes */
 int wispy1_usb_open(spectool_phy *);
 int wispy1_usb_close(spectool_phy *);
@@ -200,71 +134,70 @@ uint32_t wispy1_adler_checksum(const char *buf1, int len) {
 
 /* Scan for devices */
 int wispy1_usb_device_scan(spectool_device_list *list) {
-	struct usb_bus *bus;
-	struct usb_device *dev;
+	libusb_device **devlist;
+	struct libusb_device_descriptor desc;
+	ssize_t cnt, i;
 	int num_found = 0;
 	wispy1_usb_pair *auxpair;
-	char combopath[128];
 
-	/* Libusb init */
-	usb_init();
-	usb_find_busses();
-	usb_find_devices();
+	if (!g_usb_ctx)
+		libusb_init(&g_usb_ctx);
 
-	for (bus = usb_busses; bus; bus = bus->next) {
-		for (dev = bus->devices; dev; dev = dev->next) {
-			if (((dev->descriptor.idVendor == METAGEEK_WISPY1A_VID) &&
-				 (dev->descriptor.idProduct == METAGEEK_WISPY1A_PID)) ||
-				((dev->descriptor.idVendor == METAGEEK_WISPY1B_VID) &&
-				 (dev->descriptor.idProduct == METAGEEK_WISPY1B_PID))) {
+	cnt = libusb_get_device_list(g_usb_ctx, &devlist);
+	if (cnt < 0)
+		return 0;
 
-				/* If we're full up, break */
-				if (list->num_devs == list->max_devs - 1)
-					break;
+	for (i = 0; i < cnt; i++) {
+		if (libusb_get_device_descriptor(devlist[i], &desc) != 0)
+			continue;
 
-				auxpair = (wispy1_usb_pair *) malloc(sizeof(wispy1_usb_pair));
+		if (((desc.idVendor == METAGEEK_WISPY1A_VID) &&
+			 (desc.idProduct == METAGEEK_WISPY1A_PID)) ||
+			((desc.idVendor == METAGEEK_WISPY1B_VID) &&
+			 (desc.idProduct == METAGEEK_WISPY1B_PID))) {
 
-				snprintf(auxpair->bus, 64, "%s", bus->dirname);
-				snprintf(auxpair->dev, 64, "%s", dev->filename);
+			if (list->num_devs == list->max_devs - 1)
+				break;
 
-				snprintf(combopath, 128, "%s%s", auxpair->bus, auxpair->dev);
+			auxpair = (wispy1_usb_pair *) malloc(sizeof(wispy1_usb_pair));
+			auxpair->bus      = libusb_get_bus_number(devlist[i]);
+			auxpair->dev_addr = libusb_get_device_address(devlist[i]);
 
-				/* Fill in the list elements */
-				list->list[list->num_devs].device_id = 
-					wispy1_adler_checksum(combopath, 128);
-				snprintf(list->list[list->num_devs].name, SPECTOOL_PHY_NAME_MAX,
-						 "Wi-Spy v1 USB %u", list->list[list->num_devs].device_id);
-				list->list[list->num_devs].init_func = wispy1_usb_init;
-				list->list[list->num_devs].hw_rec = auxpair;
+			uint8_t id_buf[2] = { auxpair->bus, auxpair->dev_addr };
 
-				list->list[list->num_devs].num_sweep_ranges = 1;
+			list->list[list->num_devs].device_id =
+				wispy1_adler_checksum((char *)id_buf, 2);
+			snprintf(list->list[list->num_devs].name, SPECTOOL_PHY_NAME_MAX,
+					 "Wi-Spy v1 USB %u", list->list[list->num_devs].device_id);
+			list->list[list->num_devs].init_func = wispy1_usb_init;
+			list->list[list->num_devs].hw_rec = auxpair;
 
-				list->list[list->num_devs].supported_ranges = 
-					(spectool_sample_sweep *) malloc(SPECTOOL_SWEEP_SIZE(0));
+			list->list[list->num_devs].num_sweep_ranges = 1;
 
-				/* 2400 to 2484 MHz at 1MHz res */
-				list->list[list->num_devs].supported_ranges[0].name =
-					strdup("2.4GHz ISM");
-				list->list[list->num_devs].supported_ranges[0].start_khz = 2400000;
-				list->list[list->num_devs].supported_ranges[0].end_khz = 2484000;
-				list->list[list->num_devs].supported_ranges[0].res_hz = 1000 * 1000;
-				list->list[list->num_devs].supported_ranges[0].num_samples = 
-					WISPY1_USB_NUM_SAMPLES;
+			list->list[list->num_devs].supported_ranges =
+				(spectool_sample_sweep *) malloc(SPECTOOL_SWEEP_SIZE(0));
 
-				list->list[list->num_devs].supported_ranges[0].amp_offset_mdbm = 
-					WISPY1_USB_OFFSET_MDBM;
-				list->list[list->num_devs].supported_ranges[0].amp_res_mdbm = 
-					WISPY1_USB_RES_MDBM;
-				list->list[list->num_devs].supported_ranges[0].rssi_max = 
-					WISPY1_USB_RSSI_MAX;
+			list->list[list->num_devs].supported_ranges[0].name =
+				strdup("2.4GHz ISM");
+			list->list[list->num_devs].supported_ranges[0].start_khz = 2400000;
+			list->list[list->num_devs].supported_ranges[0].end_khz = 2484000;
+			list->list[list->num_devs].supported_ranges[0].res_hz = 1000 * 1000;
+			list->list[list->num_devs].supported_ranges[0].num_samples =
+				WISPY1_USB_NUM_SAMPLES;
 
-				list->num_devs++;
+			list->list[list->num_devs].supported_ranges[0].amp_offset_mdbm =
+				WISPY1_USB_OFFSET_MDBM;
+			list->list[list->num_devs].supported_ranges[0].amp_res_mdbm =
+				WISPY1_USB_RES_MDBM;
+			list->list[list->num_devs].supported_ranges[0].rssi_max =
+				WISPY1_USB_RSSI_MAX;
 
-				num_found++;
-			}
+			list->num_devs++;
+			num_found++;
 		}
 	}
 
+	libusb_free_device_list(devlist, 1);
 	return num_found;
 }
 
@@ -274,54 +207,57 @@ int wispy1_usb_init(spectool_phy *phydev, spectool_device_rec *rec) {
 	if (auxpair == NULL)
 		return -1;
 
-	return wispy1_usb_init_path(phydev, auxpair->bus, auxpair->dev);
+	return wispy1_usb_init_path(phydev, auxpair->bus, auxpair->dev_addr);
 }
 
-/* Initialize a specific USB device based on bus and device IDs passed by the UI */
-int wispy1_usb_init_path(spectool_phy *phydev, char *buspath, char *devpath) {
-	struct usb_bus *bus = NULL;
-	struct usb_device *dev = NULL;
-
-	struct usb_device *usb_dev_chosen = NULL;
-
-	char combopath[128];
+/* Initialize a specific USB device based on bus number and device address */
+int wispy1_usb_init_path(spectool_phy *phydev, uint8_t bus, uint8_t dev_addr) {
+	libusb_device **devlist;
+	libusb_device *found = NULL;
+	struct libusb_device_descriptor desc;
+	ssize_t cnt, i;
+	uint8_t id_buf[2] = { bus, dev_addr };
 	uint32_t cid;
 
 	wispy1_usb_aux *auxptr = NULL;
 
-	usb_init();
-	usb_find_busses();
-	usb_find_devices();
+	if (!g_usb_ctx)
+		libusb_init(&g_usb_ctx);
 
-	snprintf(combopath, 128, "%s%s", buspath, devpath);
-	cid = wispy24x_adler_checksum(combopath, 128);
+	cid = wispy1_adler_checksum((char *)id_buf, 2);
 
-	/* Don't know if a smarter way offhand, and we don't do this often, so just
-	 * crawl and compare */
-	for (bus = usb_busses; bus; bus = bus->next) {
-		if (strcmp(bus->dirname, buspath))
+	cnt = libusb_get_device_list(g_usb_ctx, &devlist);
+	if (cnt < 0) {
+		snprintf(phydev->errstr, SPECTOOL_ERROR_MAX,
+				 "WISPY1_INIT failed to enumerate USB devices");
+		return -1;
+	}
+
+	for (i = 0; i < cnt; i++) {
+		if (libusb_get_bus_number(devlist[i]) != bus)
 			continue;
-
-		for (dev = bus->devices; dev; dev = dev->next) {
-			if (strcmp(dev->filename, devpath))
-				continue;
-
-			if (((dev->descriptor.idVendor == METAGEEK_WISPY1A_VID) &&
-				 (dev->descriptor.idProduct == METAGEEK_WISPY1A_PID)) ||
-				((dev->descriptor.idVendor == METAGEEK_WISPY1B_VID) &&
-				 (dev->descriptor.idProduct == METAGEEK_WISPY1B_PID))) {
-				usb_dev_chosen = dev;
-				break;
-			} else {
-				snprintf(phydev->errstr, SPECTOOL_ERROR_MAX,
-						 "WISPY1_INIT failed, specified device %u does not "
-						 "appear to be a Wi-Spy device", cid);
-				return -1;
-			}
+		if (libusb_get_device_address(devlist[i]) != dev_addr)
+			continue;
+		if (libusb_get_device_descriptor(devlist[i], &desc) != 0)
+			continue;
+		if (((desc.idVendor == METAGEEK_WISPY1A_VID) &&
+			 (desc.idProduct == METAGEEK_WISPY1A_PID)) ||
+			((desc.idVendor == METAGEEK_WISPY1B_VID) &&
+			 (desc.idProduct == METAGEEK_WISPY1B_PID))) {
+			found = libusb_ref_device(devlist[i]);
+			break;
+		} else {
+			snprintf(phydev->errstr, SPECTOOL_ERROR_MAX,
+					 "WISPY1_INIT failed, specified device %u does not "
+					 "appear to be a Wi-Spy device", cid);
+			libusb_free_device_list(devlist, 1);
+			return -1;
 		}
 	}
 
-	if (usb_dev_chosen == NULL) {
+	libusb_free_device_list(devlist, 1);
+
+	if (found == NULL) {
 		snprintf(phydev->errstr, SPECTOOL_ERROR_MAX,
 				 "WISPY1_INIT failed, specified device %u does not appear "
 				 "to exist.", cid);
@@ -369,7 +305,7 @@ int wispy1_usb_init_path(spectool_phy *phydev, char *buspath, char *devpath) {
 
 	auxptr->configured = 0;
 
-	auxptr->dev = dev;
+	auxptr->dev = found;
 	auxptr->devhdl = NULL;
 	auxptr->phydev = phydev;
 	auxptr->sockpair[0] = -1;
@@ -412,8 +348,7 @@ void *wispy1_usb_servicethread(void *aux) {
 	wispy1_usb_aux *auxptr = (wispy1_usb_aux *) aux;
 
 	int sock;
-	struct usb_device *dev;
-	struct usb_dev_handle *wispy;
+	libusb_device_handle *wispy;
 
 	char buf[8];
 	struct timeval tm;
@@ -426,7 +361,6 @@ void *wispy1_usb_servicethread(void *aux) {
 
 	sock = auxptr->sockpair[1];
 
-	dev = auxptr->dev;
 	wispy = auxptr->devhdl;
 
 	/* We don't want to see any signals in the child thread */
@@ -458,16 +392,18 @@ void *wispy1_usb_servicethread(void *aux) {
 
 		/* Get new data only if we haven't requeued */
 		if (error == 0) {
+			int ret;
 			buf[0] = (char) 0xFF;
 
 			/* grab a HID control */
-			if (usb_control_msg(wispy,
-								USB_ENDPOINT_IN + USB_TYPE_CLASS + USB_RECIP_INTERFACE,
-								HID_GET_REPORT, (HID_RT_FEATURE << 8),
-								0, buf, 8, TIMEOUT) == 0) {
+			ret = libusb_control_transfer(wispy,
+					LIBUSB_ENDPOINT_IN | LIBUSB_REQUEST_TYPE_CLASS | LIBUSB_RECIPIENT_INTERFACE,
+					HID_GET_REPORT, (HID_RT_FEATURE << 8),
+					0, (uint8_t *)buf, 8, TIMEOUT);
+			if (ret < 0) {
 				snprintf(auxptr->phydev->errstr, SPECTOOL_ERROR_MAX,
-						 "wispy1_usb poller failed on usb_control_msg "
-						 "HID cmd: %s", strerror(errno));
+						 "wispy1_usb poller failed on libusb_control_transfer "
+						 "HID cmd: %s", libusb_error_name(ret));
 				auxptr->usb_thread_alive = 0;
 				auxptr->phydev->state = SPECTOOL_STATE_ERROR;
 				pthread_exit(NULL);
@@ -535,46 +471,34 @@ int wispy1_usb_open(spectool_phy *phydev) {
 		return -1;
 	}
 
-	if ((auxptr->devhdl = usb_open(auxptr->dev)) == NULL) {
+	int ret;
+	ret = libusb_open(auxptr->dev, &auxptr->devhdl);
+	if (ret != LIBUSB_SUCCESS) {
 		snprintf(phydev->errstr, SPECTOOL_ERROR_MAX,
 				 "wispy1_usb capture process failed to open USB device: %s",
-				 strerror(errno));
+				 libusb_error_name(ret));
 		return -1;
 	}
 
-#ifndef SYS_DARWIN
-	/* Claim the device on non-OSX systems */
-	if (usb_claim_interface(auxptr->devhdl, 0) < 0) {
+	ret = libusb_detach_kernel_driver(auxptr->devhdl, 0);
+	if (ret != LIBUSB_SUCCESS && ret != LIBUSB_ERROR_NOT_FOUND &&
+		ret != LIBUSB_ERROR_NOT_SUPPORTED) {
 		snprintf(phydev->errstr, SPECTOOL_ERROR_MAX,
-				 "could not claim interface: %s", usb_strerror());
-#ifdef LIBUSB_HAS_DETACH_KERNEL_DRIVER_NP
-		if (usb_detach_kernel_driver_np(auxptr->devhdl, 0) < 0) {
-			fprintf(stderr, "Could not detach kernel driver %s\n", usb_strerror());
-			snprintf(phydev->errstr, SPECTOOL_ERROR_MAX,
-					 "Could not detach device from kernel driver: %s",
-					 usb_strerror());
-#endif
-#ifdef SYS_LINUX
-		if (wispy24x_usb_detach_hack(auxptr->devhdl, 0, phydev->errstr) < 0) {
-			return -1;
-		}
-
-		usb_set_configuration(auxptr->devhdl, auxptr->dev->config->bConfigurationValue);
-
-		if (usb_claim_interface(auxptr->devhdl, 0) < 0) {
-			snprintf(phydev->errstr, SPECTOOL_ERROR_MAX,
-					 "wispy24x_usb capture process detached device but still "
-					 "can't claim interface: %s", strerror(errno));
-			return -1;
-		}
-#else
-		return -1;
-#endif
-#ifdef LIBUSB_HAS_DETACH_KERNEL_DRIVER_NP
-		}
-#endif
+				 "wispy1_usb could not detach kernel driver: %s",
+				 libusb_error_name(ret));
 	}
-#endif
+
+	libusb_set_configuration(auxptr->devhdl, 1);
+
+	ret = libusb_claim_interface(auxptr->devhdl, 0);
+	if (ret != LIBUSB_SUCCESS) {
+		snprintf(phydev->errstr, SPECTOOL_ERROR_MAX,
+				 "wispy1_usb could not claim interface: %s",
+				 libusb_error_name(ret));
+		libusb_close(auxptr->devhdl);
+		auxptr->devhdl = NULL;
+		return -1;
+	}
 
 	auxptr->usb_thread_alive = 1;
 	auxptr->last_read = time(0);
@@ -611,8 +535,14 @@ int wispy1_usb_close(spectool_phy *phydev) {
 	}
 
 	if (aux->devhdl) {
-		usb_close(aux->devhdl);
+		libusb_release_interface(aux->devhdl, 0);
+		libusb_close(aux->devhdl);
 		aux->devhdl = NULL;
+	}
+
+	if (aux->dev) {
+		libusb_unref_device(aux->dev);
+		aux->dev = NULL;
 	}
 
 	if (aux->sockpair[0] >= 0) {

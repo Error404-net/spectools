@@ -20,7 +20,7 @@
  */
 
 #include <stdio.h>
-#include <usb.h>
+#include <libusb.h>
 #include <stdlib.h>
 #include <signal.h>
 #include <getopt.h>
@@ -373,8 +373,8 @@ int main(int argc, char *argv[]) {
 				r = spectool_phy_poll(di);
 
 				if ((r & SPECTOOL_POLL_CONFIGURED)) {
-					printf("Configured device %u (%s)\n", 
-						   spectool_phy_getdevid(di), 
+					printf("Configured device %u (%s) %d ranges\n",
+						   spectool_phy_getdevid(di),
 						   spectool_phy_getname(di),
 						   di->device_spec->num_sweep_ranges);
 

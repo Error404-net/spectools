@@ -24,19 +24,19 @@
 #ifndef __WISPY_HW_DBX_H__
 #define __WISPY_HW_DBX_H__
 
+#include <stdint.h>
 #include "spectool_container.h"
 
-/* Wispy1 device scan results */
+/* WiSpy DBx device scan results */
 typedef struct _wispydbx_usb_pair {
-	char bus[64];
-	char dev[64];
+	uint8_t bus;
+	uint8_t dev_addr;
 } wispydbx_usb_pair;
 
 int wispydbx_usb_device_scan(spectool_device_list *list);
 
-/* Wispy24x init function to build a phydev linked to a bus and device path
- * scanned */
-int wispydbx_usb_init_path(spectool_phy *phydev, char *buspath, char *devpath);
+/* WiSpy DBx init function to build a phydev linked to a bus and device address */
+int wispydbx_usb_init_path(spectool_phy *phydev, uint8_t bus, uint8_t dev_addr);
 int wispydbx_usb_init(spectool_phy *phydev, spectool_device_rec *rec);
 
 #endif

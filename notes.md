@@ -29,3 +29,4 @@ GTK and curses UIs were disabled — this is a headless target, only the CLI `sp
 The resulting binaries+libs are staged at `spectools-pineapple-build/{bin,lib}/`, which `scripts/package.sh` reads from when assembling the SpecPine payload zip. That build output directory is treated as a checked-in artifact — only regenerate it by re-running the cross-compile above when the upstream `spectool sourcecode/` changes, not by editing it directly.
 
 **human notes** pre-libusb1.0 this will be tailored for the pineapple pager. The goal is to publish to OpenWRT repositories.
+

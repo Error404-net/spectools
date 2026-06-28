@@ -3,7 +3,17 @@ AC_INIT(Makefile.in)
 
 dnl Host type
 AC_CANONICAL_HOST
-	
+
+AC_ARG_ENABLE([gtk],
+    [AS_HELP_STRING([--disable-gtk], [Disable GTK UI])],
+    [enable_gtk=$enableval], [enable_gtk=auto])
+AC_ARG_ENABLE([curses],
+    [AS_HELP_STRING([--disable-curses], [Disable curses UI])],
+    [enable_curses=$enableval], [enable_curses=auto])
+AC_ARG_ENABLE([fb],
+    [AS_HELP_STRING([--enable-fb], [Enable framebuffer UI])],
+    [enable_fb=$enableval], [enable_fb=auto])
+
 dnl Check for standard tools
 AC_PROG_CC
 
@@ -123,15 +133,18 @@ AC_CHECK_LIB([m], [pow], AC_DEFINE(HAVE_LIBM, 1, LibM)
 			LIBS="$LIBS -lm",
 			 AC_MSG_ERROR(*** Math lib (libM) required.  Linking -lm failed.))
 
-dnl Look for LibUSB and validate its function
-AC_CHECK_HEADER([usb.h], ,AC_MSG_ERROR(*** LibUSB 0.1.x required - Libusb 1.x.x not currently supported, please install libusb-0.1.x or the compatibility layers.))
-AC_CHECK_LIB([usb], [usb_init], AC_DEFINE(HAVE_LIBUSB, 1, LibUSB) LIBS="$LIBS -lusb",
-			 AC_MSG_ERROR(*** LibUSB 0.1.x required - libusb 1.x.x not currently supported, please install libusb-0.1.x or the compatability layers.  Linking -lusb failed.))
+dnl Look for libusb-1.0
+PKG_CHECK_MODULES([LIBUSB], [libusb-1.0 >= 1.0.0],
+    [AC_DEFINE(HAVE_LIBUSB, 1, libusb-1.0)
+     CFLAGS="$CFLAGS $LIBUSB_CFLAGS"
+     LIBS="$LIBS $LIBUSB_LIBS"],
+    [AC_MSG_ERROR(*** libusb-1.0 required. Install libusb-1.0-dev or libusb-1.0-devel.)])
 
 dnl Look for curses/libcurses
+if test "$enable_curses" != "no"; then
 termcontrol="none";
 
-AC_CHECK_LIB([ncurses], [initscr], 
+AC_CHECK_LIB([ncurses], [initscr],
 			 AC_DEFINE(HAVE_LIBNCURSES, 1, NCurses terminal lib) \
 			 foundlcurses=yes curseaux="-lncurses" termcontrol="ncurses" )
 
@@ -153,11 +166,13 @@ else
 	TARGETS="$TARGETS spectool_curses"
 	CURSLIBS="$curseaux"
 fi
+fi dnl enable_curses
 
 dnl bsd/osx doesn't have this
 AC_CHECK_HEADER([values.h], AC_DEFINE(HAVE_VALUES_H, 1, values.h header))
 
 dnl Look for gtk-2.0
+if test "$enable_gtk" != "no"; then
 PKG_CHECK_MODULES(pkggtk2, [gtk+-2.0], pkggtk2=yes, pkggtk2=no)
 if test "$pkggtk2" = "yes" -a "$forcegtk" != "1"; then
 	GTK_CONFIG="pkg-config gtk+-2.0"
@@ -177,11 +192,11 @@ if test "$GTK_CONFIG"x != "x"; then
   olfl="$LIBS"
   CFLAGS="$CFLAGS `$GTK_CONFIG --cflags`"
   LIBS="$LIBS `$GTK_CONFIG --libs`"
-  
+
   AC_MSG_CHECKING(that we can link gtk/gdk)
   	AC_LINK_IFELSE([AC_LANG_PROGRAM([[
   	#include <stdio.h>
-  	#include <usb.h>
+  	#include <libusb.h>
   	#include <gtk/gtk.h>
   	]], [[
   		GdkPixmap *pxm;
@@ -195,9 +210,9 @@ if test "$GTK_CONFIG"x != "x"; then
   		CFLAGS="$ocfl"
   		LIBS="$olfl"
   	])
-	
+
 	AC_CHECK_HEADER([cairo.h], , AC_MSG_WARN(*** cairo.h graphics header required for gtk UI) && GTK_CONFIG="")
-  
+
   	if test "$GTK_CONFIG"x != "x"; then
 		AC_DEFINE(HAVE_GTK, 1, we have a gtk ui)
 
@@ -214,24 +229,16 @@ if test "$GTK_CONFIG"x != "x"; then
   	fi
 
 fi
+fi dnl enable_gtk
 
-dnl Look for linux headers and if we can issue a HID release
-AC_MSG_CHECKING([for Linux headers with DEVFS_DISCONNECT support])
-AC_LINK_IFELSE([AC_LANG_PROGRAM([[
-		#include <stdio.h>
-		#include <unistd.h>
-		#include <sys/stat.h>
-		#include <sys/ioctl.h>
-		#include <linux/usbdevice_fs.h>
-		#include <errno.h>
-		]], [[
-		int io = USBDEVFS_DISCONNECT;
-		]])],[linux_devfs_discon=yes],[linux_devfs_discon=no])
-if test $linux_devfs_discon = "yes"; then
-	AC_MSG_RESULT([yes])
-	AC_DEFINE(HAVE_LINUX_DEVDISCONNECT, 1, system has HID DEVFS_DISCONNECT)
-else
-	AC_MSG_RESULT([no])
+dnl Look for framebuffer support
+if test "$enable_fb" != "no"; then
+	AC_CHECK_HEADER([linux/fb.h],
+		[AC_DEFINE(HAVE_FB, 1, Linux framebuffer)
+		 TARGETS="$TARGETS spectool_fb"
+		 enable_fb=yes],
+		[enable_fb=no
+		 AC_MSG_WARN(*** linux/fb.h not found.  Framebuffer frontend will not be built.)])
 fi
 
 dnl Replace the values
@@ -239,6 +246,7 @@ AC_SUBST(TARGETS)
 AC_SUBST(GTKLIBS)
 AC_SUBST(HILDLIBS)
 AC_SUBST(CURSLIBS)
+AC_SUBST(FBLIBS)
 AC_SUBST(CFLAGS)
 	
 AC_CONFIG_HEADER(config.h)
