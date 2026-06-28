@@ -17,17 +17,14 @@ PKG_NAME:=spectools
 PKG_VERSION:=1.0.1
 PKG_RELEASE:=1
 
-# ponytail: using git source; swap to versioned tarball + PKG_HASH for official submission
-PKG_SOURCE_PROTO:=git
-PKG_SOURCE_URL:=https://github.com/Error404-net/spectools.git
-PKG_SOURCE_VERSION:=master
-PKG_MIRROR_HASH:=skip
+PKG_SOURCE:=$(PKG_NAME)-$(PKG_VERSION).tar.gz
+PKG_SOURCE_URL:=https://github.com/Error404-net/spectools/archive/refs/tags/v$(PKG_VERSION)
+PKG_HASH:=d5558cd419c8d46bdc958064cb97f963d1ea793866414c025906ec15033512ed
 
 PKG_MAINTAINER:=Jesse <jesse@error404.net>
 PKG_LICENSE:=GPL-2.0-only
 PKG_LICENSE_FILES:=GPL
 
-PKG_FIXUP:=autoreconf
 PKG_INSTALL:=1
 PKG_BUILD_PARALLEL:=1
 
