@@ -42,6 +42,10 @@ GTKOBJS = spectool_container.o ${DRIVERS} \
 	spectool_gtk.o
 GTKBIN = spectool_gtk
 
+FBOBJS = spectool_container.o ${DRIVERS} \
+	spectool_net_client.o spectool_fb.o
+FBBIN = spectool_fb
+
 DEPEND	= .depend
 
 all:	$(DEPEND) @TARGETS@
@@ -58,16 +62,20 @@ $(NETBIN):	$(NETOBJS)
 $(GTKBIN):	$(GTKOBJS)
 	$(CC) $^ -o $(GTKBIN) $(LDFLAGS) $(GTKLIBS)
 
+$(FBBIN):	$(FBOBJS)
+	$(CC) $^ -o $(FBBIN) $(LDFLAGS) $(LIBS)
+
 install:	@TARGETS@
 	install -d -m 755 $(BIN)
 	if [ -e $(RAWBIN) ]; then install -m 755 $(RAWBIN) $(BIN)/$(RAWBIN); fi
 	if [ -e $(NETBIN) ]; then install -m 755 $(NETBIN) $(BIN)/$(NETBIN); fi
 	if [ -e $(GTKBIN) ]; then install -m 755 $(GTKBIN) $(BIN)/$(GTKBIN); fi
 	if [ -e $(CURSBIN) ]; then install -m 755 $(CURSBIN) $(BIN)/$(CURSBIN); fi
+	if [ -e $(FBBIN) ]; then install -m 755 $(FBBIN) $(BIN)/$(FBBIN); fi
 
 clean:
 	@-rm *.o
-	@-rm $(RAWBIN) $(GTKBIN) $(NETBIN) $(CURSBIN)
+	@-rm $(RAWBIN) $(GTKBIN) $(NETBIN) $(CURSBIN) $(FBBIN)
 
 distclean:
 	@-make clean
