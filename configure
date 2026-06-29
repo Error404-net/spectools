@@ -625,7 +625,6 @@ ac_includes_default="\
 ac_header_c_list=
 ac_subst_vars='LTLIBOBJS
 LIBOBJS
-FBLIBS
 CURSLIBS
 HILDLIBS
 GTKLIBS
@@ -699,7 +698,6 @@ ac_user_opts='
 enable_option_checking
 enable_gtk
 enable_curses
-enable_fb
 '
       ac_precious_vars='build_alias
 host_alias
@@ -1338,7 +1336,6 @@ Optional Features:
   --enable-FEATURE[=ARG]  include FEATURE [ARG=yes]
   --disable-gtk           Disable GTK UI
   --disable-curses        Disable curses UI
-  --enable-fb             Enable framebuffer UI
 
 Some influential environment variables:
   CC          C compiler command
@@ -2637,16 +2634,6 @@ else case e in #(
   e) enable_curses=auto ;;
 esac
 fi
-
-# Check whether --enable-fb was given.
-if test ${enable_fb+y}
-then :
-  enableval=$enable_fb; enable_fb=$enableval
-else case e in #(
-  e) enable_fb=auto ;;
-esac
-fi
-
 
 
 
@@ -4987,25 +4974,6 @@ printf '%s\n' "$as_me: WARNING: *** Gtk2 + Cairo is now required for the GTK ui"
 
 fi
 fi
-if test "$enable_fb" != "no"; then
-	ac_fn_c_check_header_compile "$LINENO" "linux/fb.h" "ac_cv_header_linux_fb_h" "$ac_includes_default"
-if test "x$ac_cv_header_linux_fb_h" = xyes
-then :
-
-printf '%s\n' "#define HAVE_FB 1" >>confdefs.h
-
-		 TARGETS="$TARGETS spectool_fb"
-		 enable_fb=yes
-else case e in #(
-  e) enable_fb=no
-		 { printf '%s\n' "$as_me:${as_lineno-$LINENO}: WARNING: *** linux/fb.h not found.  Framebuffer frontend will not be built." >&5
-printf '%s\n' "$as_me: WARNING: *** linux/fb.h not found.  Framebuffer frontend will not be built." >&2;} ;;
-esac
-fi
-
-fi
-
-
 
 
 

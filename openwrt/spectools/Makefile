@@ -48,8 +48,7 @@ endef
 
 CONFIGURE_ARGS += \
 	--disable-gtk \
-	--disable-curses \
-	--disable-fb
+	--disable-curses
 
 define Package/spectools/install
 	$(INSTALL_DIR) $(1)/usr/bin
